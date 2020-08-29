@@ -972,6 +972,14 @@ mod tests {
             }),
             vec![None, None, Some(f64::NAN), Some(2.0), Some(0.0), Some(-1.0)],
         );
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
+        );
 
         // int8 nulls first
         test_sort_primitive_arrays::<Int8Type>(
@@ -1021,6 +1029,14 @@ mod tests {
                 nulls_first: true,
             }),
             vec![None, None, Some(-1.0), Some(0.0), Some(2.0), Some(f64::NAN)],
+        );
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            vec![Some(1.0), Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)],
         );
     }
 

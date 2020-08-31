@@ -492,7 +492,7 @@ pub fn lexsort_to_indices(columns: &[SortColumn]) -> Result<UInt32Array> {
             let values = &column.0;
             let sort_option = column.1;
 
-            match (values.is_valid(*a_idx), values.is_valid(*b_idx)) {
+            match (values.is_value_known(*a_idx), values.is_value_known(*b_idx)) {
                 (true, true) => {
                     match values.cmp_value(*a_idx, *b_idx) {
                         // equal, move on to next column

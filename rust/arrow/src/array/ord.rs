@@ -43,8 +43,6 @@ use TimeUnit::*;
 /// assert_eq!(arr.cmp_value(1, 2), Ordering::Greater);
 /// ```
 pub trait OrdArray {
-    fn is_value_known(&self, i: usize) -> bool;
-
     /// Return ordering between array element at index i and j
     fn cmp_value(&self, i: usize, j: usize) -> Ordering;
 }
@@ -53,79 +51,69 @@ impl<T: ArrowPrimitiveType> OrdArray for PrimitiveArray<T>
 where
     T::Native: std::cmp::Ord,
 {
-    fn is_value_known(&self, i: usize) -> bool {
-        self.is_valid(i)
-    }
-
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
         self.value(i).cmp(&self.value(j))
     }
 }
 
 impl OrdArray for StringArray {
-    fn is_value_known(&self, i: usize) -> bool {
-        self.is_valid(i)
-    }
-
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
         self.value(i).cmp(self.value(j))
     }
 }
 
 impl OrdArray for NullArray {
-    fn is_value_known(&self, _i: usize) -> bool {
-        false
-    }
-
     fn cmp_value(&self, _i: usize, _j: usize) -> Ordering {
         Ordering::Equal
     }
 }
 
-
 macro_rules! float_ord_cmp {
     ($NAME: ident, $T: ty) => {
-    #[inline]
-    fn $NAME(a: $T, b: $T) -> Ordering {
+        #[inline]
+        fn $NAME(a: $T, b: $T) -> Ordering {
+            if a < b {
+                return Ordering::Less;
+            }
+            if a > b {
+                return Ordering::Greater;
+            }
 
-        if a < b {
-            return Ordering::Less
+            // convert to bits with canonical pattern for NaN
+            let a = if a.is_nan() {
+                <$T>::NAN.to_bits()
+            } else {
+                a.to_bits()
+            };
+            let b = if b.is_nan() {
+                <$T>::NAN.to_bits()
+            } else {
+                b.to_bits()
+            };
+
+            if a == b {
+                // Equal or both NaN
+                Ordering::Equal
+            } else if a < b {
+                // (-0.0, 0.0) or (!NaN, NaN)
+                Ordering::Less
+            } else {
+                // (0.0, -0.0) or (NaN, !NaN)
+                Ordering::Greater
+            }
         }
-        if a > b {
-            return Ordering::Greater
-        }
-
-        // convert to bits with canonical pattern for NaN
-        let a = if a.is_nan() { <$T>::NAN.to_bits()} else { a.to_bits() };
-        let b = if b.is_nan() { <$T>::NAN.to_bits()} else { b.to_bits() };
-
-        if a == b {
-            // Equal or both NaN
-            Ordering::Equal
-        } else if a < b {
-            // (-0.0, 0.0) or (!NaN, NaN)
-            Ordering::Less
-        } else {
-            // (0.0, -0.0) or (NaN, !NaN)
-            Ordering::Greater
-        }
-    }
-
-    }
+    };
 }
 
 float_ord_cmp!(cmp_f64, f64);
 float_ord_cmp!(cmp_f32, f32);
 
+#[repr(transparent)]
 struct Float64ArrayAsOrdArray<'a>(&'a Float64Array);
+#[repr(transparent)]
 struct Float32ArrayAsOrdArray<'a>(&'a Float32Array);
 
-impl OrdArray for Float64ArrayAsOrdArray<'_>
-{
-    fn is_value_known(&self, i: usize) -> bool {
-        self.0.is_valid(i)
-    }
-
+impl OrdArray for Float64ArrayAsOrdArray<'_> {
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
         let a: f64 = self.0.value(i);
         let b: f64 = self.0.value(j);
@@ -134,13 +122,7 @@ impl OrdArray for Float64ArrayAsOrdArray<'_>
     }
 }
 
-impl OrdArray for Float32ArrayAsOrdArray<'_>
-
-{
-    fn is_value_known(&self, i: usize) -> bool {
-        self.0.is_valid(i)
-    }
-
+impl OrdArray for Float32ArrayAsOrdArray<'_> {
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
         let a: f32 = self.0.value(i);
         let b: f32 = self.0.value(j);
@@ -149,40 +131,60 @@ impl OrdArray for Float32ArrayAsOrdArray<'_>
     }
 }
 
-fn float64_as_ord_array(array: &ArrayRef) -> &OrdArray {
-    let float_array: &Float64Array =&array.as_any().downcast_ref::<Float64Array>().unwrap();
-    Float64ArrayAsOrdArray(float_array)
+fn float32_as_ord_array<'a>(array: &'a ArrayRef) -> Box<dyn OrdArray + 'a> {
+    let float_array: &Float32Array = as_primitive_array::<Float32Type>(array);
+    //let clone = std::mem::ManuallyDrop::new(float_vec);
+
+    //let as_ord = unsafe { &*(float_array as *const Float32Array as *const Float32ArrayAsOrdArray) };
+
+    //println!("before transmute");
+    //let as_ord: &Float32ArrayAsOrdArray = unsafe { std::mem::transmute_copy(array) };
+    //println!("after transmute");
+    //let as_ord = Float32ArrayAsOrdArray(float_array);
+    //as_ord
+    Box::new(Float32ArrayAsOrdArray(float_array))
 }
 
-struct StringDictionaryArrayAsOrdArray<T: ArrowDictionaryKeyType> {
-    array: ArrayRef,
-    keys: PrimitiveArray<T>
+fn float64_as_ord_array<'a>(array: &'a ArrayRef) -> Box<dyn OrdArray + 'a> {
+    let float_array: &Float64Array = as_primitive_array::<Float64Type>(array);
+
+    //println!("before transmute");
+    //let as_ord: &Float64ArrayAsOrdArray = unsafe { std::mem::transmute_copy(array) };
+    //let as_ord = unsafe { &*(float_array as *const Float64Array as *const Float64ArrayAsOrdArray) };
+    //let as_ord = unsafe { &*(array as *const ArrayRef as *const Float64ArrayAsOrdArray )};
+    //println!("after transmute");
+    //let as_ord = Float64ArrayAsOrdArray(float_array);
+    //as_ord
+    Box::new(Float64ArrayAsOrdArray(float_array))
 }
 
-impl <T: ArrowDictionaryKeyType> StringDictionaryArrayAsOrdArray<T> {
-    fn new<'a>(array: &'a ArrayRef) -> &'a Self {
-        let dict_array: &DictionaryArray<T> = as_dictionary_array::<T>(&array);
-        let keys = dict_array.keys_array();
-
-        &Self {
-            array: array.clone(),
-            keys
-        }
-    }
+#[repr(transparent)]
+struct StringDictionaryArrayAsOrdArray<'a, T: ArrowDictionaryKeyType> {
+    dict_array: &'a DictionaryArray<T>,
+    keys: PrimitiveArray<T>,
 }
 
-impl <T: ArrowDictionaryKeyType> OrdArray for StringDictionaryArrayAsOrdArray<T> {
-    fn is_value_known(&self, i: usize) -> bool {
-        self.keys.is_valid(i)
-    }
+fn string_dict_as_ord_array<'a, T: ArrowDictionaryKeyType>(
+    array: &'a ArrayRef,
+) -> Box<dyn OrdArray + 'a> {
+    let dict_array = as_dictionary_array::<T>(array);
+    let keys = dict_array.keys_array();
 
+    Box::new(StringDictionaryArrayAsOrdArray { dict_array, keys })
+}
 
+impl<T: ArrowDictionaryKeyType> OrdArray for StringDictionaryArrayAsOrdArray<'_, T> {
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
-        let a: T::Native = self.keys.value(i);
-        let b: T::Native = self.keys.value(j);
+        let keys = self.0.keys_array();
 
-        let values = self.array.as_any().downcast_ref::<DictionaryArray<T>>().expect("Unable to cast to DictionaryArray");
-        let dict = values.as_any().downcast_ref::<StringArray>().expect("Unable to cast dictionary values to StringArray");
+        let a: T::Native = keys.value(i);
+        let b: T::Native = keys.value(j);
+
+        let dict = self
+            .0
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Unable to cast dictionary values to StringArray");
 
         let sa = dict.value(a.to_usize().unwrap());
         let sb = dict.value(b.to_usize().unwrap());
@@ -192,76 +194,104 @@ impl <T: ArrowDictionaryKeyType> OrdArray for StringDictionaryArrayAsOrdArray<T>
 }
 
 /// Convert ArrayRef to OrdArray trait object
-pub fn as_ordarray(values: &ArrayRef) -> Result<&OrdArray> {
+pub fn as_ordarray<'a>(values: &'a ArrayRef) -> Result<Box<dyn OrdArray + 'a>> {
     match values.data_type() {
-        DataType::Boolean => Ok(as_boolean_array(&values)),
-        DataType::Utf8 => Ok(as_string_array(&values)),
-        DataType::Null => Ok(as_null_array(&values)),
-        DataType::Int8 => Ok(as_primitive_array::<Int8Type>(&values)),
-        DataType::Int16 => Ok(as_primitive_array::<Int16Type>(&values)),
-        DataType::Int32 => Ok(as_primitive_array::<Int32Type>(&values)),
-        DataType::Int64 => Ok(as_primitive_array::<Int64Type>(&values)),
-        DataType::UInt8 => Ok(as_primitive_array::<UInt8Type>(&values)),
-        DataType::UInt16 => Ok(as_primitive_array::<UInt16Type>(&values)),
-        DataType::UInt32 => Ok(as_primitive_array::<UInt32Type>(&values)),
-        DataType::UInt64 => Ok(as_primitive_array::<UInt64Type>(&values)),
-        DataType::Date32(_) => Ok(as_primitive_array::<Date32Type>(&values)),
-        DataType::Date64(_) => Ok(as_primitive_array::<Date64Type>(&values)),
-        DataType::Time32(Second) => Ok(as_primitive_array::<Time32SecondType>(&values)),
-        DataType::Time32(Millisecond) => {
-            Ok(as_primitive_array::<Time32MillisecondType>(&values))
+        DataType::Boolean => Ok(Box::new(as_boolean_array(&values))),
+        DataType::Utf8 => Ok(Box::new(as_string_array(&values))),
+        DataType::Null => Ok(Box::new(as_null_array(&values))),
+        DataType::Int8 => Ok(Box::new(as_primitive_array::<Int8Type>(&values))),
+        DataType::Int16 => Ok(Box::new(as_primitive_array::<Int16Type>(&values))),
+        DataType::Int32 => Ok(Box::new(as_primitive_array::<Int32Type>(&values))),
+        DataType::Int64 => Ok(Box::new(as_primitive_array::<Int64Type>(&values))),
+        DataType::UInt8 => Ok(Box::new(as_primitive_array::<UInt8Type>(&values))),
+        DataType::UInt16 => Ok(Box::new(as_primitive_array::<UInt16Type>(&values))),
+        DataType::UInt32 => Ok(Box::new(as_primitive_array::<UInt32Type>(&values))),
+        DataType::UInt64 => Ok(Box::new(as_primitive_array::<UInt64Type>(&values))),
+        DataType::Date32(_) => Ok(Box::new(as_primitive_array::<Date32Type>(&values))),
+        DataType::Date64(_) => Ok(Box::new(as_primitive_array::<Date64Type>(&values))),
+        DataType::Time32(Second) => {
+            Ok(Box::new(as_primitive_array::<Time32SecondType>(&values)))
         }
-        DataType::Time64(Microsecond) => {
-            Ok(as_primitive_array::<Time64MicrosecondType>(&values))
-        }
-        DataType::Time64(Nanosecond) => {
-            Ok(as_primitive_array::<Time64NanosecondType>(&values))
-        }
+        DataType::Time32(Millisecond) => Ok(Box::new(as_primitive_array::<
+            Time32MillisecondType,
+        >(&values))),
+        DataType::Time64(Microsecond) => Ok(Box::new(as_primitive_array::<
+            Time64MicrosecondType,
+        >(&values))),
+        DataType::Time64(Nanosecond) => Ok(Box::new(as_primitive_array::<
+            Time64NanosecondType,
+        >(&values))),
         DataType::Timestamp(Second, _) => {
-            Ok(as_primitive_array::<TimestampSecondType>(&values))
+            Ok(Box::new(as_primitive_array::<TimestampSecondType>(&values)))
         }
-        DataType::Timestamp(Millisecond, _) => {
-            Ok(as_primitive_array::<TimestampMillisecondType>(&values))
-        }
-        DataType::Timestamp(Microsecond, _) => {
-            Ok(as_primitive_array::<TimestampMicrosecondType>(&values))
-        }
-        DataType::Timestamp(Nanosecond, _) => {
-            Ok(as_primitive_array::<TimestampNanosecondType>(&values))
-        }
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            Ok(as_primitive_array::<IntervalYearMonthType>(&values))
-        }
+        DataType::Timestamp(Millisecond, _) => Ok(Box::new(as_primitive_array::<
+            TimestampMillisecondType,
+        >(&values))),
+        DataType::Timestamp(Microsecond, _) => Ok(Box::new(as_primitive_array::<
+            TimestampMicrosecondType,
+        >(&values))),
+        DataType::Timestamp(Nanosecond, _) => Ok(Box::new(as_primitive_array::<
+            TimestampNanosecondType,
+        >(&values))),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(Box::new(
+            as_primitive_array::<IntervalYearMonthType>(&values),
+        )),
         DataType::Interval(IntervalUnit::DayTime) => {
-            Ok(as_primitive_array::<IntervalDayTimeType>(&values))
+            Ok(Box::new(as_primitive_array::<IntervalDayTimeType>(&values)))
         }
         DataType::Duration(TimeUnit::Second) => {
-            Ok(as_primitive_array::<DurationSecondType>(&values))
+            Ok(Box::new(as_primitive_array::<DurationSecondType>(&values)))
         }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            Ok(as_primitive_array::<DurationMillisecondType>(&values))
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            Ok(as_primitive_array::<DurationMicrosecondType>(&values))
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            Ok(as_primitive_array::<DurationNanosecondType>(&values))
-        }
-        DataType::Float64 => {
-            Ok(float64_as_ord_array(values))
-        }
-        DataType::Dictionary(key_type, value_type) if *value_type.as_ref() == DataType::Utf8 => {
+        DataType::Duration(TimeUnit::Millisecond) => Ok(Box::new(as_primitive_array::<
+            DurationMillisecondType,
+        >(&values))),
+        DataType::Duration(TimeUnit::Microsecond) => Ok(Box::new(as_primitive_array::<
+            DurationMicrosecondType,
+        >(&values))),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok(Box::new(as_primitive_array::<
+            DurationNanosecondType,
+        >(&values))),
+        DataType::Float32 => Ok(float32_as_ord_array(&values)),
+        DataType::Float64 => Ok(float64_as_ord_array(&values)),
+        DataType::Dictionary(key_type, value_type)
+            if *value_type.as_ref() == DataType::Utf8 =>
+        {
             match key_type.as_ref() {
-                DataType::Int8 => Ok(StringDictionaryArrayAsOrdArray::<Int8Type>::new(values)),
+                DataType::Int8 => Ok(string_dict_as_ord_array::<Int8Type>(values)),
+                DataType::Int16 => Ok(string_dict_as_ord_array::<Int16Type>(values)),
+                DataType::Int32 => Ok(string_dict_as_ord_array::<Int32Type>(values)),
+                DataType::Int64 => Ok(string_dict_as_ord_array::<Int64Type>(values)),
+                DataType::UInt8 => Ok(string_dict_as_ord_array::<UInt8Type>(values)),
+                DataType::UInt16 => Ok(string_dict_as_ord_array::<UInt16Type>(values)),
+                DataType::UInt32 => Ok(string_dict_as_ord_array::<UInt32Type>(values)),
+                DataType::UInt64 => Ok(string_dict_as_ord_array::<UInt64Type>(values)),
                 t => Err(ArrowError::ComputeError(format!(
-                        "Lexical Sort not supported for dictionary key type {:?}",
-                        t
-                    )))
+                    "Lexical Sort not supported for dictionary key type {:?}",
+                    t
+                ))),
             }
         }
         t => Err(ArrowError::ComputeError(format!(
             "Lexical Sort not supported for data type {:?}",
             t
         ))),
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::array::ord::float64_as_ord_array;
+    use crate::array::{ArrayRef, Float64Array};
+    use std::cmp::Ordering;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_float64_as_ord_array() {
+        let array = Float64Array::from(vec![1.0, 2.0, 3.0, f64::NAN]);
+        let array_ref: ArrayRef = Arc::new(array);
+
+        let ord_array = float64_as_ord_array(&array_ref);
+
+        assert_eq!(Ordering::Less, ord_array.cmp_value(0, 1));
     }
 }

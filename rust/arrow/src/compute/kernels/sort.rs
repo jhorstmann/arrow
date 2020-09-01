@@ -464,7 +464,7 @@ pub fn lexsort_to_indices(columns: &[SortColumn]) -> Result<UInt32Array> {
     // convert ArrayRefs to OrdArray trait objects and perform row count check
     let flat_columns = columns
         .iter()
-        .map(|column| -> Result<(&OrdArray, SortOptions)> {
+        .map(|column| -> Result<(&Array, Box<OrdArray>, SortOptions)> {
             // row count check
             let curr_row_count = column.values.len() - column.values.offset();
             match row_count {
@@ -481,20 +481,22 @@ pub fn lexsort_to_indices(columns: &[SortColumn]) -> Result<UInt32Array> {
             }
             // flatten and convert to OrdArray
             Ok((
+                column.values.as_ref(),
                 as_ordarray(&column.values)?,
                 column.options.unwrap_or_default(),
             ))
         })
-        .collect::<Result<Vec<(&OrdArray, SortOptions)>>>()?;
+        .collect::<Result<Vec<(&Array, Box<OrdArray>, SortOptions)>>>()?;
 
     let lex_comparator = |a_idx: &usize, b_idx: &usize| -> Ordering {
         for column in flat_columns.iter() {
             let values = &column.0;
-            let sort_option = column.1;
+            let ord_array = &column.1;
+            let sort_option = column.2;
 
-            match (values.is_value_known(*a_idx), values.is_value_known(*b_idx)) {
+            match (values.is_valid(*a_idx), values.is_valid(*b_idx)) {
                 (true, true) => {
-                    match values.cmp_value(*a_idx, *b_idx) {
+                    match ord_array.cmp_value(*a_idx, *b_idx) {
                         // equal, move on to next column
                         Ordering::Equal => continue,
                         order => {

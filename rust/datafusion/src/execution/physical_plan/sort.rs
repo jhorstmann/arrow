@@ -225,4 +225,51 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_lex_sort_by_float() -> Result<()> {
+        let schema = test::aggr_test_schema();
+        let partitions = 4;
+        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let csv =
+            CsvExec::try_new(&path, CsvReadOptions::new().schema(&schema), None, 1024)?;
+
+        let sort_exec = Arc::new(SortExec::try_new(
+            vec![
+                // c11 float32 column
+                PhysicalSortExpr {
+                    expr: col("c11"),
+                    options: SortOptions::default(),
+                },
+                // c12 float64 column
+                PhysicalSortExpr {
+                    expr: col("c12"),
+                    options: SortOptions::default(),
+                },
+            ],
+            Arc::new(MergeExec::new(Arc::new(csv), 2)),
+            2,
+        )?);
+
+        assert_eq!(DataType::Float32, *sort_exec.schema().field(10).data_type());
+        assert_eq!(DataType::Float64, *sort_exec.schema().field(11).data_type());
+
+        let result: Vec<RecordBatch> = test::execute(sort_exec)?;
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        assert_eq!(DataType::Float32, *columns[10].data_type());
+        assert_eq!(DataType::Float64, *columns[11].data_type());
+
+        let c11 = as_primitive_array::<Float32Type>(&columns[10]);
+        assert_eq!(c11.value(0), 0.028003037_f32);
+        assert_eq!(c11.value(c11.len() - 1), 0.9488028_f32);
+
+        let c12 = as_primitive_array::<Float64Type>(&columns[11]);
+        assert_eq!(c12.value(0), 0.8824879447595726);
+        assert_eq!(c12.value(c12.len() - 1), 0.9293883502480845);
+
+        Ok(())
+    }
 }

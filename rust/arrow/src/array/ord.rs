@@ -47,6 +47,18 @@ pub trait OrdArray {
     fn cmp_value(&self, i: usize, j: usize) -> Ordering;
 }
 
+impl<T: OrdArray> OrdArray for Box<T> {
+    fn cmp_value(&self, i: usize, j: usize) -> Ordering {
+        T::cmp_value(self, i, j)
+    }
+}
+
+impl<T: OrdArray> OrdArray for &T {
+    fn cmp_value(&self, i: usize, j: usize) -> Ordering {
+        T::cmp_value(self, i, j)
+    }
+}
+
 impl<T: ArrowPrimitiveType> OrdArray for PrimitiveArray<T>
 where
     T::Native: std::cmp::Ord,
@@ -158,33 +170,20 @@ fn float64_as_ord_array<'a>(array: &'a ArrayRef) -> Box<dyn OrdArray + 'a> {
     Box::new(Float64ArrayAsOrdArray(float_array))
 }
 
-#[repr(transparent)]
 struct StringDictionaryArrayAsOrdArray<'a, T: ArrowDictionaryKeyType> {
     dict_array: &'a DictionaryArray<T>,
     keys: PrimitiveArray<T>,
 }
 
-fn string_dict_as_ord_array<'a, T: ArrowDictionaryKeyType>(
-    array: &'a ArrayRef,
-) -> Box<dyn OrdArray + 'a> {
-    let dict_array = as_dictionary_array::<T>(array);
-    let keys = dict_array.keys_array();
-
-    Box::new(StringDictionaryArrayAsOrdArray { dict_array, keys })
-}
-
 impl<T: ArrowDictionaryKeyType> OrdArray for StringDictionaryArrayAsOrdArray<'_, T> {
     fn cmp_value(&self, i: usize, j: usize) -> Ordering {
-        let keys = self.0.keys_array();
+        let keys = &self.keys;
 
         let a: T::Native = keys.value(i);
         let b: T::Native = keys.value(j);
 
-        let dict = self
-            .0
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Unable to cast dictionary values to StringArray");
+        let values = self.dict_array.values();
+        let dict = as_string_array(&values);
 
         let sa = dict.value(a.to_usize().unwrap());
         let sb = dict.value(b.to_usize().unwrap());
@@ -193,10 +192,45 @@ impl<T: ArrowDictionaryKeyType> OrdArray for StringDictionaryArrayAsOrdArray<'_,
     }
 }
 
+struct SortedStringDictionaryArrayAsOrdArray<'a, T: ArrowDictionaryKeyType> {
+    dict_array: &'a DictionaryArray<T>,
+    keys: PrimitiveArray<T>,
+}
+
+impl<T: ArrowDictionaryKeyType> OrdArray for SortedStringDictionaryArrayAsOrdArray<'_, T>
+where
+    T::Native: std::cmp::Ord,
+{
+    fn cmp_value(&self, i: usize, j: usize) -> Ordering {
+        let keys = &self.keys;
+
+        let a: T::Native = keys.value(i);
+        let b: T::Native = keys.value(j);
+
+        a.cmp(&b)
+    }
+}
+
+fn string_dict_as_ord_array<'a, T: ArrowDictionaryKeyType>(
+    array: &'a ArrayRef,
+) -> Box<dyn OrdArray + 'a>
+where
+    T::Native: std::cmp::Ord,
+{
+    let dict_array = as_dictionary_array::<T>(array);
+    let keys = dict_array.keys_array();
+
+    if dict_array.is_ordered() {
+        Box::new(SortedStringDictionaryArrayAsOrdArray { dict_array, keys })
+    } else {
+        Box::new(StringDictionaryArrayAsOrdArray { dict_array, keys })
+    }
+}
+
 /// Convert ArrayRef to OrdArray trait object
-pub fn as_ordarray<'a>(values: &'a ArrayRef) -> Result<Box<dyn OrdArray + 'a>> {
+pub fn as_ordarray<'a>(values: &'a ArrayRef) -> Result<Box<OrdArray + 'a>> {
     match values.data_type() {
-        DataType::Boolean => Ok(Box::new(as_boolean_array(&values))),
+        //DataType::Boolean => Ok(Box::new(as_boolean_array(&values))),
         DataType::Utf8 => Ok(Box::new(as_string_array(&values))),
         DataType::Null => Ok(Box::new(as_null_array(&values))),
         DataType::Int8 => Ok(Box::new(as_primitive_array::<Int8Type>(&values))),
